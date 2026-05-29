@@ -4,7 +4,6 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
 <meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
 <title>Groq Voice AI</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@300;400;500&family=Syne:wght@400;700;800&display=swap" rel="stylesheet">
 <style>
@@ -75,9 +74,11 @@
   .wave span:nth-child(3) { height: 8px; animation-delay: 0.2s; } .wave span:nth-child(4) { height: 14px; animation-delay: 0.3s; }
   .wave span:nth-child(5) { height: 6px; animation-delay: 0.4s; }
   @keyframes wave { from { transform: scaleY(0.5); } to { transform: scaleY(1); } }
-  .error-msg { background: rgba(247,106,138,0.1); border: 1px solid rgba(247,106,138,0.3); border-radius: 8px; padding: 8px 12px; font-size: 0.7rem; color: var(--accent2); display: none; }
+  .error-msg { background: rgba(247,106,138,0.1); border: 1px solid rgba(247,106,138,0.3); border-radius: 8px; padding: 8px 12px; font-size: 0.7rem; color: var(--accent2); display: none; word-break: break-word; }
   .error-msg.show { display: block; }
   .interim-text { font-size: 0.7rem; color: var(--muted); font-style: italic; min-height: 1.2em; text-align: center; padding: 0 8px; }
+  .test-btn { width: 100%; padding: 8px; border-radius: 8px; border: 1px dashed var(--border); background: transparent; color: var(--muted); font-family: 'DM Mono', monospace; font-size: 0.65rem; cursor: pointer; text-transform: uppercase; letter-spacing: 0.08em; }
+  .test-btn:active { background: var(--surface); }
 </style>
 </head>
 <body>
@@ -100,6 +101,7 @@
       <div class="status-dot" id="statusDot"></div>
       <span id="statusText">No key saved</span>
     </div>
+    <button class="test-btn" onclick="testConnection()">🔌 Test connection</button>
   </div>
 
   <div class="error-msg" id="errorMsg"></div>
@@ -135,6 +137,13 @@ let isRecording = false;
 let groqApiKey = '';
 let finalTranscript = '';
 
+// Try direct first, fall back to cors proxy
+const ENDPOINTS = [
+  'https://api.groq.com/openai/v1/chat/completions',
+  'https://corsproxy.io/?https://api.groq.com/openai/v1/chat/completions',
+  'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions')
+];
+
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('groq_api_key');
   if (saved) { groqApiKey = saved; document.getElementById('apiKey').value = saved; setStatus(true, 'Key loaded ✓'); }
@@ -142,18 +151,15 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 function initSpeechRecognition() {
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SpeechRecognition) { showError('Speech recognition not supported. Use Chrome on Android.'); return; }
-
-  recognition = new SpeechRecognition();
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { showError('Speech recognition not supported. Please use Chrome.'); return; }
+  recognition = new SR();
   recognition.continuous = false;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
-  recognition.maxAlternatives = 1;
 
   recognition.onstart = () => {
-    isRecording = true;
-    finalTranscript = '';
+    isRecording = true; finalTranscript = '';
     document.getElementById('micBtn').classList.add('recording');
     document.getElementById('micHint').textContent = 'Listening... tap to stop';
     document.getElementById('interimText').textContent = '';
@@ -174,20 +180,16 @@ function initSpeechRecognition() {
     document.getElementById('micBtn').classList.remove('recording');
     document.getElementById('interimText').textContent = '';
     const text = finalTranscript.trim();
-    if (text) {
-      addMessage('you', text);
-      askGroq(text);
-    } else {
-      setHint('Tap to speak');
-    }
+    if (text) { addMessage('you', text); askGroq(text); }
+    else setHint('Tap to speak');
   };
 
   recognition.onerror = (e) => {
     isRecording = false;
     document.getElementById('micBtn').classList.remove('recording');
     document.getElementById('interimText').textContent = '';
-    if (e.error === 'no-speech') { setHint('No speech detected — try again'); return; }
-    if (e.error === 'not-allowed') { showError('Microphone blocked. Tap the 🔒 in Chrome address bar and allow microphone.'); return; }
+    if (e.error === 'no-speech') { setHint('No speech — try again'); return; }
+    if (e.error === 'not-allowed') { showError('Mic blocked. Tap the 🔒 in address bar → Site settings → Microphone → Allow'); return; }
     showError('Speech error: ' + e.error);
     setHint('Tap to speak');
   };
@@ -195,51 +197,86 @@ function initSpeechRecognition() {
 
 function toggleRecording() {
   if (!groqApiKey) { showError('Save your Groq API key first'); return; }
-  if (!recognition) { showError('Speech recognition not available in this browser.'); return; }
-  if (isRecording) {
-    recognition.stop();
-  } else {
-    stopSpeaking();
-    try { recognition.start(); } catch(e) { showError('Could not start mic: ' + e.message); }
-  }
+  if (!recognition) { showError('Speech recognition not available'); return; }
+  if (isRecording) { recognition.stop(); }
+  else { stopSpeaking(); try { recognition.start(); } catch(e) { showError('Mic error: ' + e.message); } }
 }
 
 function saveKey() {
   const val = document.getElementById('apiKey').value.trim();
   if (!val) { showError('Please enter your Groq API key'); return; }
+  if (!val.startsWith('gsk_')) { showError('Key should start with gsk_ — check you copied the full key'); return; }
   groqApiKey = val;
   localStorage.setItem('groq_api_key', val);
   setStatus(true, 'Key saved ✓');
   hideError();
 }
 
+async function testConnection() {
+  if (!groqApiKey) { showError('Save your API key first'); return; }
+  setHint('Testing...');
+  hideError();
+  try {
+    const result = await fetchGroq('Say "connection successful" and nothing else.');
+    addMessage('ai', result);
+    speak(result);
+    setStatus(true, 'Connected ✓');
+  } catch(e) {
+    showError('Test failed: ' + e.message);
+  }
+  setHint('Tap to speak');
+}
+
+async function fetchGroq(prompt) {
+  const body = JSON.stringify({
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    messages: [
+      { role: 'system', content: 'You are a helpful voice assistant. Give clear concise answers suitable for reading aloud. No markdown, no bullet points.' },
+      { role: 'user', content: prompt }
+    ],
+    max_tokens: 400
+  });
+
+  // Try each endpoint until one works
+  let lastError = '';
+  for (const url of ENDPOINTS) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+        body
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        lastError = err.error?.message || `HTTP ${res.status}`;
+        // If it's an auth error, no point trying other endpoints
+        if (res.status === 401) throw new Error('Invalid API key — check console.groq.com');
+        continue;
+      }
+      const data = await res.json();
+      const answer = data.choices?.[0]?.message?.content?.trim();
+      if (!answer) throw new Error('Empty response from Groq');
+      return answer;
+    } catch(e) {
+      lastError = e.message;
+      if (e.message.includes('Invalid API key')) throw e;
+      // else try next endpoint
+    }
+  }
+  throw new Error(lastError || 'All connection attempts failed');
+}
+
 async function askGroq(prompt) {
   addThinking();
   setHint('Thinking...');
   try {
-    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-        messages: [
-          { role: 'system', content: 'You are a helpful voice assistant. Give clear, concise answers suitable for reading aloud. Avoid markdown, bullet points, or special characters. Keep answers brief and natural.' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 400
-      })
-    });
+    const answer = await fetchGroq(prompt);
     removeThinking();
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error?.message || `HTTP ${res.status}`);
-    }
-    const data = await res.json();
-    const answer = data.choices?.[0]?.message?.content?.trim();
-    if (answer) { addMessage('ai', answer); speak(answer); }
-  } catch(err) {
+    addMessage('ai', answer);
+    speak(answer);
+  } catch(e) {
     removeThinking();
-    showError('Groq error: ' + err.message);
+    showError('Error: ' + e.message);
   }
   setHint('Tap to speak');
 }
@@ -269,6 +306,7 @@ function addMessage(role, text) {
 }
 
 function addThinking() {
+  document.getElementById('emptyState')?.remove();
   const div = document.createElement('div');
   div.id = 'thinking'; div.className = 'message';
   div.innerHTML = `<div class="msg-label ai">Groq AI</div><div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`;
