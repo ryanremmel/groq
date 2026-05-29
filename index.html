@@ -109,7 +109,7 @@
   <div class="conversation" id="conversation">
     <div class="empty-state" id="emptyState">
       <div class="empty-icon">🎙️</div>
-      <div class="empty-text">Tap the button and speak.<br>Groq will answer out loud.</div>
+      <div class="empty-text">Tap the button once to start.<br>Speak naturally — pause to send.<br>Tap again to stop.</div>
     </div>
   </div>
 
@@ -136,9 +136,14 @@ let recognition = null;
 let isRecording = false;
 let groqApiKey = '';
 let finalTranscript = '';
-let messageHistory = []; // keeps full conversation
+let messageHistory = [];
+let handsFreeModeOn = false;  // once tapped, stays listening
+let pauseTimer = null;        // fires after silence to send
+let isBusy = false;           // true while Groq is thinking/speaking
+let shouldRestartAfterBusy = false; // re-listen after AI finishes speaking
 
-// Try direct first, fall back to cors proxy
+const PAUSE_DELAY = 1800; // ms of silence before sending (1.8s)
+
 const ENDPOINTS = [
   'https://api.groq.com/openai/v1/chat/completions',
   'https://corsproxy.io/?https://api.groq.com/openai/v1/chat/completions',
@@ -155,52 +160,114 @@ function initSpeechRecognition() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { showError('Speech recognition not supported. Please use Chrome.'); return; }
   recognition = new SR();
-  recognition.continuous = false;
+  recognition.continuous = true;   // don't auto-stop on pause
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
   recognition.onstart = () => {
-    isRecording = true; finalTranscript = '';
+    isRecording = true;
+    finalTranscript = '';
     document.getElementById('micBtn').classList.add('recording');
-    document.getElementById('micHint').textContent = 'Listening... tap to stop';
     document.getElementById('interimText').textContent = '';
+    setHint('Listening... tap to stop');
     hideError();
   };
 
   recognition.onresult = (e) => {
+    // Clear the pause timer on every new word
+    clearTimeout(pauseTimer);
+
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      if (e.results[i].isFinal) finalTranscript += e.results[i][0].transcript;
-      else interim += e.results[i][0].transcript;
+      if (e.results[i].isFinal) {
+        finalTranscript += e.results[i][0].transcript + ' ';
+      } else {
+        interim += e.results[i][0].transcript;
+      }
     }
-    document.getElementById('interimText').textContent = finalTranscript || interim;
+    document.getElementById('interimText').textContent = (finalTranscript + interim).trim();
+
+    // Start pause timer — if user stops talking for PAUSE_DELAY ms, send it
+    if (finalTranscript.trim()) {
+      pauseTimer = setTimeout(() => {
+        sendTranscript();
+      }, PAUSE_DELAY);
+    }
   };
 
   recognition.onend = () => {
     isRecording = false;
     document.getElementById('micBtn').classList.remove('recording');
-    document.getElementById('interimText').textContent = '';
-    const text = finalTranscript.trim();
-    if (text) { addMessage('you', text); askGroq(text); }
-    else setHint('Tap to speak');
+    // If hands-free and not busy, restart listening automatically
+    if (handsFreeModeOn && !isBusy) {
+      setTimeout(() => startListening(), 300);
+    }
   };
 
   recognition.onerror = (e) => {
     isRecording = false;
     document.getElementById('micBtn').classList.remove('recording');
     document.getElementById('interimText').textContent = '';
-    if (e.error === 'no-speech') { setHint('No speech — try again'); return; }
-    if (e.error === 'not-allowed') { showError('Mic blocked. Tap the 🔒 in address bar → Site settings → Microphone → Allow'); return; }
-    showError('Speech error: ' + e.error);
-    setHint('Tap to speak');
+    if (e.error === 'no-speech') {
+      // No speech is fine in continuous mode — just restart
+      if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300);
+      return;
+    }
+    if (e.error === 'not-allowed') {
+      handsFreeModeOn = false;
+      showError('Mic blocked. Tap 🔒 in address bar → Site settings → Microphone → Allow');
+      setHint('Tap to speak');
+      return;
+    }
+    // Other errors — restart if hands-free
+    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 500);
   };
+}
+
+function sendTranscript() {
+  clearTimeout(pauseTimer);
+  const text = finalTranscript.trim();
+  finalTranscript = '';
+  document.getElementById('interimText').textContent = '';
+  if (!text) return;
+
+  // Stop listening while AI responds
+  try { recognition.stop(); } catch(e) {}
+  isRecording = false;
+  document.getElementById('micBtn').classList.remove('recording');
+
+  addMessage('you', text);
+  askGroq(text);
+}
+
+function startListening() {
+  if (!recognition || isRecording || isBusy) return;
+  finalTranscript = '';
+  try { recognition.start(); } catch(e) { /* already started */ }
+}
+
+function stopListening() {
+  clearTimeout(pauseTimer);
+  handsFreeModeOn = false;
+  try { recognition.stop(); } catch(e) {}
+  document.getElementById('micBtn').classList.remove('recording');
+  document.getElementById('interimText').textContent = '';
+  setHint('Tap to speak');
 }
 
 function toggleRecording() {
   if (!groqApiKey) { showError('Save your Groq API key first'); return; }
   if (!recognition) { showError('Speech recognition not available'); return; }
-  if (isRecording) { recognition.stop(); }
-  else { stopSpeaking(); try { recognition.start(); } catch(e) { showError('Mic error: ' + e.message); } }
+
+  if (handsFreeModeOn) {
+    // User tapped to stop hands-free mode
+    stopListening();
+  } else {
+    // First tap — enter hands-free mode
+    handsFreeModeOn = true;
+    stopSpeaking();
+    startListening();
+  }
 }
 
 function saveKey() {
@@ -225,7 +292,7 @@ async function testConnection() {
   } catch(e) {
     showError('Test failed: ' + e.message);
   }
-  setHint('Tap to speak');
+  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to speak');
 }
 
 async function fetchGroq(prompt, isTest = false) {
@@ -280,6 +347,7 @@ async function fetchGroq(prompt, isTest = false) {
 }
 
 async function askGroq(prompt) {
+  isBusy = true;
   addThinking();
   setHint('Thinking...');
   try {
@@ -290,23 +358,47 @@ async function askGroq(prompt) {
   } catch(e) {
     removeThinking();
     showError('Error: ' + e.message);
+    isBusy = false;
+    if (handsFreeModeOn) setTimeout(() => startListening(), 400);
+    setHint('Listening... tap to stop');
   }
-  setHint('Tap to speak');
 }
 
 function speak(text) {
   stopSpeaking();
   const utter = new SpeechSynthesisUtterance(text);
   utter.rate = 0.95; utter.pitch = 1; utter.lang = 'en-US';
-  utter.onstart = () => document.getElementById('speakingBar').classList.add('active');
-  utter.onend = () => document.getElementById('speakingBar').classList.remove('active');
-  utter.onerror = () => document.getElementById('speakingBar').classList.remove('active');
+  utter.onstart = () => {
+    document.getElementById('speakingBar').classList.add('active');
+    setHint('AI speaking...');
+  };
+  utter.onend = () => {
+    document.getElementById('speakingBar').classList.remove('active');
+    isBusy = false;
+    if (handsFreeModeOn) {
+      setHint('Listening... tap to stop');
+      setTimeout(() => startListening(), 400);
+    } else {
+      setHint('Tap to speak');
+    }
+  };
+  utter.onerror = () => {
+    document.getElementById('speakingBar').classList.remove('active');
+    isBusy = false;
+    if (handsFreeModeOn) {
+      setHint('Listening... tap to stop');
+      setTimeout(() => startListening(), 400);
+    } else {
+      setHint('Tap to speak');
+    }
+  };
   window.speechSynthesis.speak(utter);
 }
 
 function stopSpeaking() {
   window.speechSynthesis.cancel();
   document.getElementById('speakingBar').classList.remove('active');
+  isBusy = false;
 }
 
 function addMessage(role, text) {
@@ -330,6 +422,7 @@ function addThinking() {
 function removeThinking() { document.getElementById('thinking')?.remove(); }
 
 function clearChat() {
+  stopListening();
   stopSpeaking();
   messageHistory = [];
   document.getElementById('conversation').innerHTML = `<div class="empty-state" id="emptyState"><div class="empty-icon">🎙️</div><div class="empty-text">Tap the button and speak.<br>Groq will answer out loud.</div></div>`;
