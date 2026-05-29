@@ -136,6 +136,7 @@ let recognition = null;
 let isRecording = false;
 let groqApiKey = '';
 let finalTranscript = '';
+let messageHistory = []; // keeps full conversation
 
 // Try direct first, fall back to cors proxy
 const ENDPOINTS = [
@@ -217,7 +218,7 @@ async function testConnection() {
   setHint('Testing...');
   hideError();
   try {
-    const result = await fetchGroq('Say "connection successful" and nothing else.');
+    const result = await fetchGroq('Say "connection successful" and nothing else.', true);
     addMessage('ai', result);
     speak(result);
     setStatus(true, 'Connected ✓');
@@ -227,12 +228,17 @@ async function testConnection() {
   setHint('Tap to speak');
 }
 
-async function fetchGroq(prompt) {
+async function fetchGroq(prompt, isTest = false) {
+  // For test calls, don't touch history
+  const messages = isTest
+    ? [{ role: 'user', content: prompt }]
+    : [...messageHistory, { role: 'user', content: prompt }];
+
   const body = JSON.stringify({
     model: 'meta-llama/llama-4-scout-17b-16e-instruct',
     messages: [
-      { role: 'system', content: 'You are a helpful voice assistant. Give clear concise answers suitable for reading aloud. No markdown, no bullet points.' },
-      { role: 'user', content: prompt }
+      { role: 'system', content: 'You are a helpful voice assistant. Give clear concise answers suitable for reading aloud. No markdown, no bullet points. Remember context from earlier in the conversation.' },
+      ...messages
     ],
     max_tokens: 400
   });
@@ -256,6 +262,13 @@ async function fetchGroq(prompt) {
       const data = await res.json();
       const answer = data.choices?.[0]?.message?.content?.trim();
       if (!answer) throw new Error('Empty response from Groq');
+      // Save to history if not a test call
+      if (!isTest) {
+        messageHistory.push({ role: 'user', content: prompt });
+        messageHistory.push({ role: 'assistant', content: answer });
+        // Keep history to last 20 messages (10 exchanges) to avoid token limits
+        if (messageHistory.length > 20) messageHistory = messageHistory.slice(-20);
+      }
       return answer;
     } catch(e) {
       lastError = e.message;
@@ -318,6 +331,7 @@ function removeThinking() { document.getElementById('thinking')?.remove(); }
 
 function clearChat() {
   stopSpeaking();
+  messageHistory = [];
   document.getElementById('conversation').innerHTML = `<div class="empty-state" id="emptyState"><div class="empty-icon">🎙️</div><div class="empty-text">Tap the button and speak.<br>Groq will answer out loud.</div></div>`;
   hideError();
 }
