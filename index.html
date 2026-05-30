@@ -339,18 +339,26 @@ function checkVoiceCommand(text) {
 
 function sendTranscript() {
   clearTimeout(pauseTimer);
-  const text = finalTranscript.trim();
   
+  // 1. Grab whatever is currently visible on the screen right now
+  const screenText = document.getElementById('interimText').textContent.trim();
+  const fallbackText = finalTranscript.trim();
+  const text = screenText || fallbackText;
+  
+  // 2. If there is absolutely no text at all, reset UI and exit safely
   if (!text) {
     document.getElementById('interimText').textContent = '';
     return;
   }
 
+  // 3. Clear the text buffers immediately so the UI resets for the next sentence
   finalTranscript = '';
   document.getElementById('interimText').textContent = '';
 
+  // 4. Run voice command checks
   if (checkVoiceCommand(text)) return;
 
+  // 5. Safely isolate and shut down the speech engine
   try { 
     if (recognition) recognition.stop(); 
   } catch(e) {
@@ -360,6 +368,7 @@ function sendTranscript() {
   isRecording = false;
   document.getElementById('micBtn').classList.remove('recording');
 
+  // 6. Force-push the message to the screen and send it to Gemini
   addMessage('you', text);
   askGemini(text);
 }
