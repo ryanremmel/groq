@@ -283,25 +283,21 @@ async function callGeminiAPI(prompt, isTest = false) {
 }
 
 async function askGemini(prompt) {
-  isBusy = true;
   addThinking();
   setHint('Thinking...');
   try {
     const answer = await callGeminiAPI(prompt);
     removeThinking();
     addMessage('ai', answer);
-    if (!isMuted) { speak(answer); } 
-    else {
-      isBusy = false;
-      if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
-      else setHint('Tap to start hands-free');
+    if (!isMuted) { 
+      speak(answer); 
+    } else {
+      if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 200); }
     }
   } catch(e) {
     removeThinking();
     showError('API Exception: ' + e.message);
-    isBusy = false;
     if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
   }
 }
 
@@ -322,22 +318,28 @@ async function testConnection() {
 
 // 4. TTS SYSTEM
 function speak(text) {
-  stopSpeaking();
+  stopSpeaking(); // Clears any current sentences immediately
   const utter = new SpeechSynthesisUtterance(text);
   utter.rate = 0.95; utter.pitch = 1; utter.lang = 'en-US';
-  utter.onstart = () => { document.getElementById('speakingBar').classList.add('active'); setHint('AI speaking...'); };
+  
+  utter.onstart = () => { 
+    document.getElementById('speakingBar').classList.add('active'); 
+    setHint('AI speaking... (Say "Stop" to interrupt)'); 
+    
+    // Safety check: Ensure mic restarts/stays alive when audio stream initiates
+    if (handsFreeModeOn && !isRecording) setTimeout(() => startListening(), 100);
+  };
+  
   utter.onend = () => {
     document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
+    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 200); }
   };
+  
   utter.onerror = () => {
     document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
+    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 200); }
   };
+  
   window.speechSynthesis.speak(utter);
 }
 
@@ -429,6 +431,8 @@ function initSpeechRecognition() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { showError('Speech recognition not supported. Use Chrome.'); return; }
   recognition = new SR();
+  
+  // Continuous listening lets it process background text while AI speaks
   recognition.continuous = true;
   recognition.interimResults = true;
   recognition.lang = 'en-US';
@@ -437,28 +441,46 @@ function initSpeechRecognition() {
     isRecording = true;
     finalTranscript = '';
     document.getElementById('micBtn').classList.add('recording');
-    setHint('Listening... tap to stop');
+    if (!window.speechSynthesis.speaking) {
+      setHint('Listening... tap to stop');
+    }
     hideError();
   };
 
   recognition.onresult = (e) => {
     clearTimeout(pauseTimer);
     let currentSpeech = '';
-    for (let i = e.resultIndex; i < e.results.length; i++) { currentSpeech += e.results[i][0].transcript; }
+    for (let i = e.resultIndex; i < e.results.length; i++) { 
+      currentSpeech += e.results[i][0].transcript; 
+    }
     currentSpeech = currentSpeech.trim();
+    
     if (currentSpeech.length > 0) {
       finalTranscript = currentSpeech;
       document.getElementById('interimText').textContent = finalTranscript;
+      
+      // CRITICAL: If you speak a command while the AI is talking, execute it immediately!
+      if (window.speechSynthesis.speaking && checkVoiceCommand(finalTranscript)) {
+        document.getElementById('interimText').textContent = '';
+        finalTranscript = '';
+        return; 
+      }
+      
       pauseTimer = setTimeout(() => { sendTranscript(); }, PAUSE_DELAY);
     }
   };
 
-  recognition.onend = () => { isRecording = false; document.getElementById('micBtn').classList.remove('recording'); if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300); };
+  // Prevent the mic from shutting down permanently when AI takes turns
+  recognition.onend = () => { 
+    isRecording = false; 
+    document.getElementById('micBtn').classList.remove('recording'); 
+    if (handsFreeModeOn) setTimeout(() => startListening(), 200); 
+  };
+  
   recognition.onerror = (e) => {
-    isRecording = false; document.getElementById('micBtn').classList.remove('recording'); document.getElementById('interimText').textContent = '';
-    if (e.error === 'no-speech') { if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300); return; }
-    if (e.error === 'not-allowed') { handsFreeModeOn = false; showError('Mic blocked.'); setHint('Tap to start hands-free'); return; }
-    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 500);
+    if (e.error === 'no-speech') { if (handsFreeModeOn) setTimeout(() => startListening(), 200); return; }
+    if (e.error === 'not-allowed') { handsFreeModeOn = false; showError('Mic blocked.'); return; }
+    if (handsFreeModeOn) setTimeout(() => startListening(), 400);
   };
 }
 
