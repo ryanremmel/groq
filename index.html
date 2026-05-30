@@ -199,10 +199,11 @@ let pauseTimer = null;
 let isBusy = false;
 let isMuted = false;
 
-const PAUSE_DELAY = 2000; // Complete 2 second stabilization window
+const PAUSE_DELAY = 2000; 
+
+// FIX: Direct connections to Groq. No broken proxies.
 const ENDPOINTS = [
-  'https://corsproxy.io/?' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions'),
-  'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions')
+  'https://api.groq.com/openai/v1/chat/completions'
 ];
 
 window.addEventListener('DOMContentLoaded', () => {
@@ -232,7 +233,7 @@ function initSpeechRecognition() {
     clearTimeout(pauseTimer);
     let currentSpeech = '';
     
-    // Read clean raw buffer data across changes
+    // Completely replaces the old loop that multiplied your words
     for (let i = e.resultIndex; i < e.results.length; i++) {
       currentSpeech += e.results[i][0].transcript;
     }
@@ -243,7 +244,6 @@ function initSpeechRecognition() {
       finalTranscript = currentSpeech;
       document.getElementById('interimText').textContent = finalTranscript;
       
-      // Fire prompt compilation only when speech reaches zero-delta state
       pauseTimer = setTimeout(() => {
         sendTranscript();
       }, PAUSE_DELAY);
@@ -383,7 +383,7 @@ async function fetchGroq(prompt, isTest = false) {
     : [...messageHistory, { role: 'user', content: prompt }];
 
   const body = JSON.stringify({
-    model: 'llama-3.3-70b-versatile', // Corrected stable model id
+    model: 'llama-3.3-70b-versatile', 
     messages: [
       { role: 'system', content: 'You are a helpful voice assistant. Give clear, concise answers suitable for reading aloud. No markdown, no bullet points. Keep it conversational.' },
       ...messages
@@ -396,7 +396,10 @@ async function fetchGroq(prompt, isTest = false) {
     try {
       const res = await fetch(url, {
         method: 'POST',
-        headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
+        headers: { 
+          'Authorization': `Bearer ${groqApiKey}`, 
+          'Content-Type': 'application/json'
+        },
         body
       });
       if (!res.ok) {
