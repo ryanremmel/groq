@@ -189,7 +189,7 @@
 </div>
 
 <script>
-// 1. GLOBAL VARIANCE CONFIGURATIONS
+// 1. GLOBAL VARS
 let recognition = null;
 let isRecording = false;
 let groqApiKey = ''; 
@@ -203,18 +203,7 @@ let isMuted = false;
 const PAUSE_DELAY = 2000; 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
-// 2. LIFECYCLE INITIALIZATION BOOTSTRAPPER
-window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('gemini_api_key');
-  if (saved) { 
-    groqApiKey = saved; 
-    document.getElementById('apiKey').value = saved; 
-    setStatus(true, 'Key loaded ✓'); 
-  }
-  initSpeechRecognition();
-});
-
-// 3. UTILITY ASSISTANTS & EVENT LOGIC
+// 2. UTILITY ASSISTANTS
 function setHint(t) { document.getElementById('micHint').textContent = t; }
 function setStatus(active, text) { document.getElementById('statusDot').className = 'status-dot' + (active ? ' active' : ''); document.getElementById('statusText').textContent = text; }
 function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.classList.add('show'); }
@@ -251,10 +240,9 @@ function saveKey() {
   hideError();
 }
 
-// 4. API CONNECTIVITY HANDLERS
+// 3. API CORE CONFIGURATION
 async function callGeminiAPI(prompt, isTest = false) {
   let contentsPayload = [];
-
   if (isTest) {
     contentsPayload = [{ role: 'user', parts: [{ text: prompt }] }];
   } else {
@@ -265,17 +253,10 @@ async function callGeminiAPI(prompt, isTest = false) {
     contentsPayload.push({ role: 'user', parts: [{ text: prompt }] });
   }
 
-  const systemInstruction = {
-    parts: [{ text: "You are a helpful voice assistant. Keep answers concise, clear, and highly conversational. Do not use markdown syntax, bullet points, asterisks, or bold formatting since your answers are being read out loud." }]
-  };
-
   const body = JSON.stringify({
     contents: contentsPayload,
-    systemInstruction: systemInstruction,
-    generationConfig: {
-      maxOutputTokens: 350,
-      temperature: 0.7
-    }
+    systemInstruction: { parts: [{ text: "You are a helpful voice assistant. Keep answers concise and conversational. No markdown." }] },
+    generationConfig: { maxOutputTokens: 350, temperature: 0.7 }
   });
 
   try {
@@ -284,16 +265,13 @@ async function callGeminiAPI(prompt, isTest = false) {
       headers: { 'Content-Type': 'application/json' },
       body
     });
-
     if (!response.ok) {
       const errData = await response.json().catch(() => ({}));
-      const msg = errData.error?.message || `HTTP error ${response.status}`;
-      throw new Error(msg);
+      throw new Error(errData.error?.message || `HTTP error ${response.status}`);
     }
-
     const data = await response.json();
     const txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!txt) throw new Error('Could not parse text value from response payload.');
+    if (!txt) throw new Error('Could not parse text value.');
 
     if (!isTest) {
       messageHistory.push({ role: 'user', content: prompt });
@@ -301,9 +279,7 @@ async function callGeminiAPI(prompt, isTest = false) {
       if (messageHistory.length > 20) messageHistory = messageHistory.slice(-20);
     }
     return txt;
-  } catch (error) {
-    throw error;
-  }
+  } catch (error) { throw error; }
 }
 
 async function askGemini(prompt) {
@@ -314,9 +290,8 @@ async function askGemini(prompt) {
     const answer = await callGeminiAPI(prompt);
     removeThinking();
     addMessage('ai', answer);
-    if (!isMuted) {
-      speak(answer);
-    } else {
+    if (!isMuted) { speak(answer); } 
+    else {
       isBusy = false;
       if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
       else setHint('Tap to start hands-free');
@@ -345,7 +320,7 @@ async function testConnection() {
   setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
 }
 
-// 5. NATIVE VOICE SYNTHESIS ENGINE
+// 4. TTS SYSTEM
 function speak(text) {
   stopSpeaking();
   const utter = new SpeechSynthesisUtterance(text);
@@ -371,68 +346,7 @@ function stopSpeaking() {
   document.getElementById('speakingBar').classList.remove('active');
 }
 
-// 6. SPEECH RECOGNITION CONFIGURATION & ENGINE LOOP
-function initSpeechRecognition() {
-  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (!SR) { showError('Speech recognition not supported. Use Chrome.'); return; }
-  recognition = new SR();
-  recognition.continuous = true;
-  recognition.interimResults = true;
-  recognition.lang = 'en-US';
-
-  recognition.onstart = () => {
-    isRecording = true;
-    finalTranscript = '';
-    document.getElementById('micBtn').classList.add('recording');
-    document.getElementById('interimText').textContent = '';
-    setHint('Listening... tap to stop');
-    hideError();
-  };
-
-  recognition.onresult = (e) => {
-    clearTimeout(pauseTimer);
-    let currentSpeech = '';
-    
-    for (let i = e.resultIndex; i < e.results.length; i++) {
-      currentSpeech += e.results[i][0].transcript;
-    }
-    
-    currentSpeech = currentSpeech.trim();
-    
-    if (currentSpeech.length > 0) {
-      finalTranscript = currentSpeech;
-      document.getElementById('interimText').textContent = finalTranscript;
-      
-      pauseTimer = setTimeout(() => {
-        sendTranscript();
-      }, PAUSE_DELAY);
-    }
-  };
-
-  recognition.onend = () => {
-    isRecording = false;
-    document.getElementById('micBtn').classList.remove('recording');
-    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300);
-  };
-
-  recognition.onerror = (e) => {
-    isRecording = false;
-    document.getElementById('micBtn').classList.remove('recording');
-    document.getElementById('interimText').textContent = '';
-    if (e.error === 'no-speech') {
-      if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300);
-      return;
-    }
-    if (e.error === 'not-allowed') {
-      handsFreeModeOn = false;
-      showError('Mic blocked. Check browser privacy/site settings.');
-      setHint('Tap to start hands-free');
-      return;
-    }
-    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 500);
-  };
-}
-
+// 5. SPEECH RECOGNITION PIPELINE
 function checkVoiceCommand(text) {
   const t = text.toLowerCase().trim();
   if (t.includes('end')) { cmdEnd(); return true; }
@@ -445,7 +359,6 @@ function checkVoiceCommand(text) {
 
 function sendTranscript() {
   clearTimeout(pauseTimer);
-  
   const screenText = document.getElementById('interimText').textContent.trim();
   const fallbackText = finalTranscript.trim();
   const text = screenText || fallbackText;
@@ -457,8 +370,108 @@ function sendTranscript() {
 
   finalTranscript = '';
   document.getElementById('interimText').textContent = '';
-
   if (checkVoiceCommand(text)) return;
 
-  try { 
-    if (recognition) recognition.stop();
+  try { if (recognition) recognition.stop(); } catch(e) {}
+  
+  isRecording = false;
+  document.getElementById('micBtn').classList.remove('recording');
+  addMessage('you', text);
+  askGemini(text);
+}
+
+function startListening() {
+  if (!recognition || isRecording || isBusy) return;
+  finalTranscript = '';
+  try { recognition.start(); } catch(e) {}
+}
+
+function stopListening() {
+  clearTimeout(pauseTimer);
+  handsFreeModeOn = false;
+  try { recognition.stop(); } catch(e) {}
+  isRecording = false;
+  document.getElementById('micBtn').classList.remove('recording');
+  document.getElementById('interimText').textContent = '';
+}
+
+function toggleRecording() {
+  if (!groqApiKey) { showError('Save your Gemini API key first'); return; }
+  if (!recognition) { showError('Speech recognition not available'); return; }
+  if (handsFreeModeOn) {
+    stopListening();
+    setHint('Tap to start hands-free');
+  } else {
+    handsFreeModeOn = true;
+    stopSpeaking();
+    startListening();
+  }
+}
+
+// 6. DASHBOARD CONTROL INTERACTIVE TRIGGERS
+function cmdStop() {
+  stopSpeaking();
+  isBusy = false;
+  if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
+}
+function cmdMute() { isMuted = true; stopSpeaking(); document.getElementById('mutedBadge').classList.add('show'); setHint(handsFreeModeOn ? 'Muted — listening...' : 'Muted'); }
+function cmdUnmute() { isMuted = false; document.getElementById('mutedBadge').classList.remove('show'); setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free'); }
+function cmdNewChat() {
+  messageHistory = [];
+  document.getElementById('emptyState')?.remove();
+  document.getElementById('conversation').innerHTML = '<div class="empty-state" id="emptyState"><div class="empty-icon">🗑️</div><div class="empty-text">New conversation started.</div></div>';
+  hideError();
+  if (handsFreeModeOn) setTimeout(() => startListening(), 300);
+}
+function cmdEnd() { stopListening(); stopSpeaking(); isBusy = false; setHint('Tap to start hands-free'); }
+
+function initSpeechRecognition() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { showError('Speech recognition not supported. Use Chrome.'); return; }
+  recognition = new SR();
+  recognition.continuous = true;
+  recognition.interimResults = true;
+  recognition.lang = 'en-US';
+
+  recognition.onstart = () => {
+    isRecording = true;
+    finalTranscript = '';
+    document.getElementById('micBtn').classList.add('recording');
+    setHint('Listening... tap to stop');
+    hideError();
+  };
+
+  recognition.onresult = (e) => {
+    clearTimeout(pauseTimer);
+    let currentSpeech = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) { currentSpeech += e.results[i][0].transcript; }
+    currentSpeech = currentSpeech.trim();
+    if (currentSpeech.length > 0) {
+      finalTranscript = currentSpeech;
+      document.getElementById('interimText').textContent = finalTranscript;
+      pauseTimer = setTimeout(() => { sendTranscript(); }, PAUSE_DELAY);
+    }
+  };
+
+  recognition.onend = () => { isRecording = false; document.getElementById('micBtn').classList.remove('recording'); if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300); };
+  recognition.onerror = (e) => {
+    isRecording = false; document.getElementById('micBtn').classList.remove('recording'); document.getElementById('interimText').textContent = '';
+    if (e.error === 'no-speech') { if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300); return; }
+    if (e.error === 'not-allowed') { handsFreeModeOn = false; showError('Mic blocked.'); setHint('Tap to start hands-free'); return; }
+    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 500);
+  };
+}
+
+// 7. SECURE DOWNSTREAM BOOTSTRAP CLOSURE
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('gemini_api_key');
+  if (saved) { 
+    groqApiKey = saved; 
+    document.getElementById('apiKey').value = saved; 
+    setStatus(true, 'Key loaded ✓'); 
+  }
+  initSpeechRecognition();
+});
+</script>
+</body>
+</html>
