@@ -112,7 +112,7 @@
 <div class="app">
   <div class="header">
     <div class="logo">GEMINI VOICE AI</div>
-    <div class="model-badge">gemini-1.5-flash</div>
+    <div class="model-badge">gemini-2.5-flash</div>
   </div>
 
   <div class="api-section">
@@ -189,21 +189,69 @@
 </div>
 
 <script>
+// 1. GLOBAL VARIANCE CONFIGURATIONS
 let recognition = null;
 let isRecording = false;
-let groqApiKey = ''; // Holds the saved Gemini key
+let groqApiKey = ''; 
 let finalTranscript = '';
-let messageHistory = []; // Tracks multi-turn conversational history
+let messageHistory = []; 
 let handsFreeModeOn = false;
 let pauseTimer = null;
 let isBusy = false;
 let isMuted = false;
 
 const PAUSE_DELAY = 2000; 
-
-// FIX: Updated structure to natively support both AI Studio and Google Cloud key styles
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
 
+// 2. LIFECYCLE INITIALIZATION BOOTSTRAPPER
+window.addEventListener('DOMContentLoaded', () => {
+  const saved = localStorage.getItem('gemini_api_key');
+  if (saved) { 
+    groqApiKey = saved; 
+    document.getElementById('apiKey').value = saved; 
+    setStatus(true, 'Key loaded ✓'); 
+  }
+  initSpeechRecognition();
+});
+
+// 3. UTILITY ASSISTANTS & EVENT LOGIC
+function setHint(t) { document.getElementById('micHint').textContent = t; }
+function setStatus(active, text) { document.getElementById('statusDot').className = 'status-dot' + (active ? ' active' : ''); document.getElementById('statusText').textContent = text; }
+function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.classList.add('show'); }
+function hideError() { document.getElementById('errorMsg').classList.remove('show'); }
+function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+
+function addMessage(role, text) {
+  document.getElementById('emptyState')?.remove();
+  const div = document.createElement('div');
+  div.className = 'message';
+  div.innerHTML = `<div class="msg-label ${role}">${role === 'you' ? 'You' : 'Gemini AI'}</div><div class="msg-bubble ${role}">${escapeHtml(text)}</div>`;
+  document.getElementById('conversation').appendChild(div);
+  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function addThinking() {
+  document.getElementById('emptyState')?.remove();
+  const div = document.createElement('div');
+  div.id = 'thinking'; div.className = 'message';
+  div.innerHTML = `<div class="msg-label ai">Gemini AI</div><div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`;
+  document.getElementById('conversation').appendChild(div);
+  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
+}
+
+function removeThinking() { document.getElementById('thinking')?.remove(); }
+
+function saveKey() {
+  const val = document.getElementById('apiKey').value.trim();
+  if (!val) { showError('Please enter your Gemini API key'); return; }
+  if (!val.startsWith('AIzaSy') && !val.startsWith('AQ.')) { showError('Invalid Key Format'); return; }
+  groqApiKey = val;
+  localStorage.setItem('gemini_api_key', val);
+  setStatus(true, 'Key saved ✓');
+  hideError();
+}
+
+// 4. API CONNECTIVITY HANDLERS
 async function callGeminiAPI(prompt, isTest = false) {
   let contentsPayload = [];
 
@@ -231,7 +279,6 @@ async function callGeminiAPI(prompt, isTest = false) {
   });
 
   try {
-    // Appends the key seamlessly to clear out the 404/Not Found route error
     const response = await fetch(`${BASE_URL}?key=${groqApiKey}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -259,12 +306,72 @@ async function callGeminiAPI(prompt, isTest = false) {
   }
 }
 
-window.addEventListener('DOMContentLoaded', () => {
-  const saved = localStorage.getItem('gemini_api_key');
-  if (saved) { groqApiKey = saved; document.getElementById('apiKey').value = saved; setStatus(true, 'Key loaded ✓'); }
-  initSpeechRecognition();
-});
+async function askGemini(prompt) {
+  isBusy = true;
+  addThinking();
+  setHint('Thinking...');
+  try {
+    const answer = await callGeminiAPI(prompt);
+    removeThinking();
+    addMessage('ai', answer);
+    if (!isMuted) {
+      speak(answer);
+    } else {
+      isBusy = false;
+      if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
+      else setHint('Tap to start hands-free');
+    }
+  } catch(e) {
+    removeThinking();
+    showError('API Exception: ' + e.message);
+    isBusy = false;
+    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
+    else setHint('Tap to start hands-free');
+  }
+}
 
+async function testConnection() {
+  if (!groqApiKey) { showError('Save your Gemini API key first'); return; }
+  setHint('Testing...');
+  hideError();
+  try {
+    const result = await callGeminiAPI('Say "connection successful" and nothing else.', true);
+    addMessage('ai', result);
+    if (!isMuted) speak(result);
+    setStatus(true, 'Connected ✓');
+  } catch(e) {
+    showError('Connection test failed: ' + e.message);
+  }
+  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
+}
+
+// 5. NATIVE VOICE SYNTHESIS ENGINE
+function speak(text) {
+  stopSpeaking();
+  const utter = new SpeechSynthesisUtterance(text);
+  utter.rate = 0.95; utter.pitch = 1; utter.lang = 'en-US';
+  utter.onstart = () => { document.getElementById('speakingBar').classList.add('active'); setHint('AI speaking...'); };
+  utter.onend = () => {
+    document.getElementById('speakingBar').classList.remove('active');
+    isBusy = false;
+    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
+    else setHint('Tap to start hands-free');
+  };
+  utter.onerror = () => {
+    document.getElementById('speakingBar').classList.remove('active');
+    isBusy = false;
+    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
+    else setHint('Tap to start hands-free');
+  };
+  window.speechSynthesis.speak(utter);
+}
+
+function stopSpeaking() {
+  window.speechSynthesis.cancel();
+  document.getElementById('speakingBar').classList.remove('active');
+}
+
+// 6. SPEECH RECOGNITION CONFIGURATION & ENGINE LOOP
 function initSpeechRecognition() {
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) { showError('Speech recognition not supported. Use Chrome.'); return; }
@@ -286,7 +393,6 @@ function initSpeechRecognition() {
     clearTimeout(pauseTimer);
     let currentSpeech = '';
     
-    // Stable loop architecture reads real-time changes cleanly without duplicate stacking
     for (let i = e.resultIndex; i < e.results.length; i++) {
       currentSpeech += e.results[i][0].transcript;
     }
@@ -340,202 +446,19 @@ function checkVoiceCommand(text) {
 function sendTranscript() {
   clearTimeout(pauseTimer);
   
-  // 1. Grab whatever is currently visible on the screen right now
   const screenText = document.getElementById('interimText').textContent.trim();
   const fallbackText = finalTranscript.trim();
   const text = screenText || fallbackText;
   
-  // 2. If there is absolutely no text at all, reset UI and exit safely
   if (!text) {
     document.getElementById('interimText').textContent = '';
     return;
   }
 
-  // 3. Clear the text buffers immediately so the UI resets for the next sentence
   finalTranscript = '';
   document.getElementById('interimText').textContent = '';
 
-  // 4. Run voice command checks
   if (checkVoiceCommand(text)) return;
 
-  // 5. Safely isolate and shut down the speech engine
   try { 
-    if (recognition) recognition.stop(); 
-  } catch(e) {
-    console.error("Speech engine handled exception safely:", e);
-  }
-  
-  isRecording = false;
-  document.getElementById('micBtn').classList.remove('recording');
-
-  // 6. Force-push the message to the screen and send it to Gemini
-  addMessage('you', text);
-  askGemini(text);
-}
-
-function startListening() {
-  if (!recognition || isRecording || isBusy) return;
-  finalTranscript = '';
-  try { recognition.start(); } catch(e) {}
-}
-
-function stopListening() {
-  clearTimeout(pauseTimer);
-  handsFreeModeOn = false;
-  try { recognition.stop(); } catch(e) {}
-  isRecording = false;
-  document.getElementById('micBtn').classList.remove('recording');
-  document.getElementById('interimText').textContent = '';
-}
-
-function toggleRecording() {
-  if (!groqApiKey) { showError('Save your Gemini API key first'); return; }
-  if (!recognition) { showError('Speech recognition not available'); return; }
-  if (handsFreeModeOn) {
-    stopListening();
-    setHint('Tap to start hands-free');
-  } else {
-    handsFreeModeOn = true;
-    stopSpeaking();
-    startListening();
-  }
-}
-
-function cmdStop() {
-  stopSpeaking();
-  isBusy = false;
-  if (handsFreeModeOn) {
-    setHint('Listening... tap to stop');
-    setTimeout(() => startListening(), 300);
-  }
-}
-
-function cmdMute() {
-  isMuted = true;
-  stopSpeaking();
-  document.getElementById('mutedBadge').classList.add('show');
-  setHint(handsFreeModeOn ? 'Muted — listening...' : 'Muted');
-}
-
-function cmdUnmute() {
-  isMuted = false;
-  document.getElementById('mutedBadge').classList.remove('show');
-  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
-}
-
-function cmdNewChat() {
-  messageHistory = [];
-  document.getElementById('emptyState')?.remove();
-  const conv = document.getElementById('conversation');
-  conv.innerHTML = '<div class="empty-state" id="emptyState"><div class="empty-icon">🗑️</div><div class="empty-text">New conversation started.<br>Speak your first message.</div></div>';
-  hideError();
-  if (handsFreeModeOn) setTimeout(() => startListening(), 300);
-}
-
-function cmdEnd() {
-  stopListening();
-  stopSpeaking();
-  isBusy = false;
-  setHint('Tap to start hands-free');
-}
-
-async function askGemini(prompt) {
-  isBusy = true;
-  addThinking();
-  setHint('Thinking...');
-  try {
-    const answer = await callGeminiAPI(prompt);
-    removeThinking();
-    addMessage('ai', answer);
-    if (!isMuted) {
-      speak(answer);
-    } else {
-      isBusy = false;
-      if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
-      else setHint('Tap to start hands-free');
-    }
-  } catch(e) {
-    removeThinking();
-    showError('API Exception: ' + e.message);
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  }
-}
-
-async function testConnection() {
-  if (!groqApiKey) { showError('Save your Gemini API key first'); return; }
-  setHint('Testing...');
-  hideError();
-  try {
-    const result = await callGeminiAPI('Say "connection successful" and nothing else.', true);
-    addMessage('ai', result);
-    if (!isMuted) speak(result);
-    setStatus(true, 'Connected ✓');
-  } catch(e) {
-    showError('Connection test failed: ' + e.message);
-  }
-  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
-}
-
-function speak(text) {
-  stopSpeaking();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 0.95; utter.pitch = 1; utter.lang = 'en-US';
-  utter.onstart = () => { document.getElementById('speakingBar').classList.add('active'); setHint('AI speaking...'); };
-  utter.onend = () => {
-    document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  };
-  utter.onerror = () => {
-    document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  };
-  window.speechSynthesis.speak(utter);
-}
-
-function stopSpeaking() {
-  window.speechSynthesis.cancel();
-  document.getElementById('speakingBar').classList.remove('active');
-}
-
-function addMessage(role, text) {
-  document.getElementById('emptyState')?.remove();
-  const div = document.createElement('div');
-  div.className = 'message';
-  div.innerHTML = `<div class="msg-label ${role}">${role === 'you' ? 'You' : 'Gemini AI'}</div><div class="msg-bubble ${role}">${escapeHtml(text)}</div>`;
-  document.getElementById('conversation').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-function addThinking() {
-  document.getElementById('emptyState')?.remove();
-  const div = document.createElement('div');
-  div.id = 'thinking'; div.className = 'message';
-  div.innerHTML = `<div class="msg-label ai">Gemini AI</div><div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`;
-  document.getElementById('conversation').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-function removeThinking() { document.getElementById('thinking')?.remove(); }
-function saveKey() {
-  const val = document.getElementById('apiKey').value.trim();
-  if (!val) { showError('Please enter your Gemini API key'); return; }
-  if (!val.startsWith('AIzaSy') && !val.startsWith('AQ.')) { showError('Invalid Key Format'); return; }
-  groqApiKey = val;
-  localStorage.setItem('gemini_api_key', val);
-  setStatus(true, 'Key saved ✓');
-  hideError();
-}
-function setHint(t) { document.getElementById('micHint').textContent = t; }
-function setStatus(active, text) { document.getElementById('statusDot').className = 'status-dot' + (active ? ' active' : ''); document.getElementById('statusText').textContent = text; }
-function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.classList.add('show'); }
-function hideError() { document.getElementById('errorMsg').classList.remove('show'); }
-function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-</script>
-</body>
-</html>
+    if (recognition) recognition.stop();
