@@ -294,9 +294,10 @@ function checkVoiceCommand(text) {
 function sendTranscript() {
   clearTimeout(pauseTimer);
   const text = finalTranscript.trim();
+  if (!text) return;
+
   finalTranscript = '';
   document.getElementById('interimText').textContent = '';
-  if (!text) return;
 
   if (checkVoiceCommand(text)) return;
 
