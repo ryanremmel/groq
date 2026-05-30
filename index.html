@@ -112,7 +112,7 @@
 <div class="app">
   <div class="header">
     <div class="logo">GROQ VOICE AI</div>
-    <div class="model-badge">llama-4-scout</div>
+    <div class="model-badge">llama-3.3-70b</div>
   </div>
 
   <div class="api-section">
@@ -199,7 +199,7 @@ let pauseTimer = null;
 let isBusy = false;
 let isMuted = false;
 
-const PAUSE_DELAY = 1800;
+const PAUSE_DELAY = 2000; // Complete 2 second stabilization window
 const ENDPOINTS = [
   'https://corsproxy.io/?' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions'),
   'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions')
@@ -219,13 +219,9 @@ function initSpeechRecognition() {
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
-  // Track the last time text actually changed to prevent duplicate rapid fires
-  let lastTextLength = 0;
-
   recognition.onstart = () => {
     isRecording = true;
     finalTranscript = '';
-    lastTextLength = 0;
     document.getElementById('micBtn').classList.add('recording');
     document.getElementById('interimText').textContent = '';
     setHint('Listening... tap to stop');
@@ -234,26 +230,23 @@ function initSpeechRecognition() {
 
   recognition.onresult = (e) => {
     clearTimeout(pauseTimer);
-    
     let currentSpeech = '';
     
-    // Grab whatever the microphone hears right now, ignoring the glitchy isFinal flag
+    // Read clean raw buffer data across changes
     for (let i = e.resultIndex; i < e.results.length; i++) {
       currentSpeech += e.results[i][0].transcript;
     }
     
-    // Clean up the text stream
     currentSpeech = currentSpeech.trim();
     
     if (currentSpeech.length > 0) {
-      // Direct assignment breaks the multiplication loop completely
       finalTranscript = currentSpeech;
       document.getElementById('interimText').textContent = finalTranscript;
       
-      // If the user stopped talking and the text length stabilized, prepare to send
+      // Fire prompt compilation only when speech reaches zero-delta state
       pauseTimer = setTimeout(() => {
         sendTranscript();
-      }, 2000); // 2 seconds of absolute silence sends the message
+      }, PAUSE_DELAY);
     }
   };
 
@@ -266,274 +259,4 @@ function initSpeechRecognition() {
   recognition.onerror = (e) => {
     isRecording = false;
     document.getElementById('micBtn').classList.remove('recording');
-    document.getElementById('interimText').textContent = '';
-    if (e.error === 'no-speech') {
-      if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 300);
-      return;
-    }
-    if (e.error === 'not-allowed') {
-      handsFreeModeOn = false;
-      showError('Mic blocked. Tap 🔒 in address bar → Site settings → Microphone → Allow');
-      setHint('Tap to start hands-free');
-      return;
-    }
-    if (handsFreeModeOn && !isBusy) setTimeout(() => startListening(), 500);
-  };
-}
-
-function checkVoiceCommand(text) {
-  const t = text.toLowerCase().trim();
-  if (t.includes('end')) { cmdEnd(); return true; }
-  if (t.includes('new chat') || t.includes('new prompt')) { cmdNewChat(); return true; }
-  if (t.includes('unmute')) { cmdUnmute(); return true; }
-  if (t.includes('mute')) { cmdMute(); return true; }
-  if (t.includes('stop')) { cmdStop(); return true; }
-  return false;
-}
-
-function sendTranscript() {
-  clearTimeout(pauseTimer);
-  const text = finalTranscript.trim();
-  
-  // If there's no text, reset UI and exit safely
-  if (!text) {
-    document.getElementById('interimText').textContent = '';
-    return;
-  }
-
-  // Clear the variables immediately so the UI clears up
-  finalTranscript = '';
-  document.getElementById('interimText').textContent = '';
-
-  // Check voice commands first
-  if (checkVoiceCommand(text)) return;
-
-  // Crucial Fix: Force isolation on mic closure so a mic error 
-  // never blocks the AI fetch operation
-  try { 
-    if (recognition) {
-      recognition.stop(); 
-    }
-  } catch(e) {
-    console.log("Mic stop caught safely:", e);
-  }
-  
-  isRecording = false;
-  document.getElementById('micBtn').classList.remove('recording');
-
-  // Push to screen and force-send to the API
-  addMessage('you', text);
-  askGroq(text);
-}
-
-function startListening() {
-  if (!recognition || isRecording || isBusy) return;
-  finalTranscript = '';
-  try { recognition.start(); } catch(e) {}
-}
-
-function stopListening() {
-  clearTimeout(pauseTimer);
-  handsFreeModeOn = false;
-  try { recognition.stop(); } catch(e) {}
-  isRecording = false;
-  document.getElementById('micBtn').classList.remove('recording');
-  document.getElementById('interimText').textContent = '';
-}
-
-function toggleRecording() {
-  if (!groqApiKey) { showError('Save your Groq API key first'); return; }
-  if (!recognition) { showError('Speech recognition not available'); return; }
-  if (handsFreeModeOn) {
-    stopListening();
-    setHint('Tap to start hands-free');
-  } else {
-    handsFreeModeOn = true;
-    stopSpeaking();
-    startListening();
-  }
-}
-
-function cmdStop() {
-  stopSpeaking();
-  isBusy = false;
-  if (handsFreeModeOn) {
-    setHint('Listening... tap to stop');
-    setTimeout(() => startListening(), 300);
-  }
-}
-
-function cmdMute() {
-  isMuted = true;
-  stopSpeaking();
-  document.getElementById('mutedBadge').classList.add('show');
-  setHint(handsFreeModeOn ? 'Muted — listening...' : 'Muted');
-}
-
-function cmdUnmute() {
-  isMuted = false;
-  document.getElementById('mutedBadge').classList.remove('show');
-  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
-}
-
-function cmdNewChat() {
-  messageHistory = [];
-  document.getElementById('emptyState')?.remove();
-  const conv = document.getElementById('conversation');
-  conv.innerHTML = '<div class="empty-state" id="emptyState"><div class="empty-icon">🗑️</div><div class="empty-text">New conversation started.<br>Speak your first message.</div></div>';
-  hideError();
-  if (handsFreeModeOn) setTimeout(() => startListening(), 300);
-}
-
-function cmdEnd() {
-  stopListening();
-  stopSpeaking();
-  isBusy = false;
-  setHint('Tap to start hands-free');
-}
-
-async function fetchGroq(prompt, isTest = false) {
-  const messages = isTest
-    ? [{ role: 'user', content: prompt }]
-    : [...messageHistory, { role: 'user', content: prompt }];
-
-  const body = JSON.stringify({
-    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-    messages: [
-      { role: 'system', content: 'You are a helpful voice assistant. Give clear, concise answers suitable for reading aloud. No markdown, no bullet points. Keep it conversational.' },
-      ...messages
-    ],
-    max_tokens: 400
-  });
-
-  let lastError = '';
-  for (const url of ENDPOINTS) {
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${groqApiKey}`, 'Content-Type': 'application/json' },
-        body
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        lastError = err.error?.message || `HTTP ${res.status}`;
-        if (res.status === 401) throw new Error('Invalid API key');
-        continue;
-      }
-      const data = await res.json();
-      const answer = data.choices?.[0]?.message?.content?.trim();
-      if (!answer) throw new Error('Empty response');
-      if (!isTest) {
-        messageHistory.push({ role: 'user', content: prompt });
-        messageHistory.push({ role: 'assistant', content: answer });
-        if (messageHistory.length > 20) messageHistory = messageHistory.slice(-20);
-      }
-      return answer;
-    } catch(e) {
-      lastError = e.message;
-      if (e.message.includes('Invalid API key')) throw e;
-    }
-  }
-  throw new Error(lastError || 'All connection attempts failed');
-}
-
-async function askGroq(prompt) {
-  isBusy = true;
-  addThinking();
-  setHint('Thinking...');
-  try {
-    const answer = await fetchGroq(prompt);
-    removeThinking();
-    addMessage('ai', answer);
-    if (!isMuted) {
-      speak(answer);
-    } else {
-      isBusy = false;
-      if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 300); }
-      else setHint('Tap to start hands-free');
-    }
-  } catch(e) {
-    removeThinking();
-    showError('Error: ' + e.message);
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  }
-}
-
-async function testConnection() {
-  if (!groqApiKey) { showError('Save your API key first'); return; }
-  setHint('Testing...');
-  hideError();
-  try {
-    const result = await fetchGroq('Say "connection successful" and nothing else.', true);
-    addMessage('ai', result);
-    if (!isMuted) speak(result);
-    setStatus(true, 'Connected ✓');
-  } catch(e) {
-    showError('Test failed: ' + e.message);
-  }
-  setHint(handsFreeModeOn ? 'Listening... tap to stop' : 'Tap to start hands-free');
-}
-
-function speak(text) {
-  stopSpeaking();
-  const utter = new SpeechSynthesisUtterance(text);
-  utter.rate = 0.95; utter.pitch = 1; utter.lang = 'en-US';
-  utter.onstart = () => { document.getElementById('speakingBar').classList.add('active'); setHint('AI speaking...'); };
-  utter.onend = () => {
-    document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  };
-  utter.onerror = () => {
-    document.getElementById('speakingBar').classList.remove('active');
-    isBusy = false;
-    if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 400); }
-    else setHint('Tap to start hands-free');
-  };
-  window.speechSynthesis.speak(utter);
-}
-
-function stopSpeaking() {
-  window.speechSynthesis.cancel();
-  document.getElementById('speakingBar').classList.remove('active');
-}
-
-function addMessage(role, text) {
-  document.getElementById('emptyState')?.remove();
-  const div = document.createElement('div');
-  div.className = 'message';
-  div.innerHTML = `<div class="msg-label ${role}">${role === 'you' ? 'You' : 'Groq AI'}</div><div class="msg-bubble ${role}">${escapeHtml(text)}</div>`;
-  document.getElementById('conversation').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-function addThinking() {
-  document.getElementById('emptyState')?.remove();
-  const div = document.createElement('div');
-  div.id = 'thinking'; div.className = 'message';
-  div.innerHTML = `<div class="msg-label ai">Groq AI</div><div class="thinking"><div class="thinking-dot"></div><div class="thinking-dot"></div><div class="thinking-dot"></div></div>`;
-  document.getElementById('conversation').appendChild(div);
-  div.scrollIntoView({ behavior: 'smooth', block: 'end' });
-}
-
-function removeThinking() { document.getElementById('thinking')?.remove(); }
-function saveKey() {
-  const val = document.getElementById('apiKey').value.trim();
-  if (!val) { showError('Please enter your Groq API key'); return; }
-  if (!val.startsWith('gsk_')) { showError('Key should start with gsk_'); return; }
-  groqApiKey = val;
-  localStorage.setItem('groq_api_key', val);
-  setStatus(true, 'Key saved ✓');
-  hideError();
-}
-function setHint(t) { document.getElementById('micHint').textContent = t; }
-function setStatus(active, text) { document.getElementById('statusDot').className = 'status-dot' + (active ? ' active' : ''); document.getElementById('statusText').textContent = text; }
-function showError(msg) { const el = document.getElementById('errorMsg'); el.textContent = msg; el.classList.add('show'); }
-function hideError() { document.getElementById('errorMsg').classList.remove('show'); }
-function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-</script>
-</body>
-</html>
+    document.getElementById('
