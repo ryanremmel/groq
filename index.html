@@ -294,17 +294,34 @@ function checkVoiceCommand(text) {
 function sendTranscript() {
   clearTimeout(pauseTimer);
   const text = finalTranscript.trim();
-  if (!text) return;
+  
+  // If there's no text, reset UI and exit safely
+  if (!text) {
+    document.getElementById('interimText').textContent = '';
+    return;
+  }
 
+  // Clear the variables immediately so the UI clears up
   finalTranscript = '';
   document.getElementById('interimText').textContent = '';
 
+  // Check voice commands first
   if (checkVoiceCommand(text)) return;
 
-  try { recognition.stop(); } catch(e) {}
+  // Crucial Fix: Force isolation on mic closure so a mic error 
+  // never blocks the AI fetch operation
+  try { 
+    if (recognition) {
+      recognition.stop(); 
+    }
+  } catch(e) {
+    console.log("Mic stop caught safely:", e);
+  }
+  
   isRecording = false;
   document.getElementById('micBtn').classList.remove('recording');
 
+  // Push to screen and force-send to the API
   addMessage('you', text);
   askGroq(text);
 }
