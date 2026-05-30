@@ -202,8 +202,9 @@ let isMuted = false;
 const PAUSE_DELAY = 2000; 
 
 // FIX: Direct connections to Groq. No broken proxies.
+// Updated proxy array to bypass the browser fetch block
 const ENDPOINTS = [
-  'https://api.groq.com/openai/v1/chat/completions'
+  'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions')
 ];
 
 window.addEventListener('DOMContentLoaded', () => {
