@@ -201,8 +201,63 @@ let isMuted = false;
 
 const PAUSE_DELAY = 2000; 
 
-// FIX: Direct native browser access to Gemini. Zero proxies.
-const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent';
+// FIX: Updated structure to natively support both AI Studio and Google Cloud key styles
+const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
+
+async function callGeminiAPI(prompt, isTest = false) {
+  let contentsPayload = [];
+
+  if (isTest) {
+    contentsPayload = [{ role: 'user', parts: [{ text: prompt }] }];
+  } else {
+    contentsPayload = messageHistory.map(msg => ({
+      role: msg.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: msg.content }]
+    }));
+    contentsPayload.push({ role: 'user', parts: [{ text: prompt }] });
+  }
+
+  const systemInstruction = {
+    parts: [{ text: "You are a helpful voice assistant. Keep answers concise, clear, and highly conversational. Do not use markdown syntax, bullet points, asterisks, or bold formatting since your answers are being read out loud." }]
+  };
+
+  const body = JSON.stringify({
+    contents: contentsPayload,
+    systemInstruction: systemInstruction,
+    generationConfig: {
+      maxOutputTokens: 350,
+      temperature: 0.7
+    }
+  });
+
+  try {
+    // Appends the key seamlessly to clear out the 404/Not Found route error
+    const response = await fetch(`${BASE_URL}?key=${groqApiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body
+    });
+
+    if (!response.ok) {
+      const errData = await response.json().catch(() => ({}));
+      const msg = errData.error?.message || `HTTP error ${response.status}`;
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    const txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (!txt) throw new Error('Could not parse text value from response payload.');
+
+    if (!isTest) {
+      messageHistory.push({ role: 'user', content: prompt });
+      messageHistory.push({ role: 'assistant', content: txt });
+      if (messageHistory.length > 20) messageHistory = messageHistory.slice(-20);
+    }
+    return txt;
+  } catch (error) {
+    throw error;
+  }
+}
 
 window.addEventListener('DOMContentLoaded', () => {
   const saved = localStorage.getItem('gemini_api_key');
@@ -373,62 +428,6 @@ function cmdEnd() {
   stopSpeaking();
   isBusy = false;
   setHint('Tap to start hands-free');
-}
-
-async function callGeminiAPI(prompt, isTest = false) {
-  let contentsPayload = [];
-
-  if (isTest) {
-    contentsPayload = [{ role: 'user', parts: [{ text: prompt }] }];
-  } else {
-    // Structural conversion array maps user/assistant logs safely to Gemini semantics
-    contentsPayload = messageHistory.map(msg => ({
-      role: msg.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: msg.content }]
-    }));
-    contentsPayload.push({ role: 'user', parts: [{ text: prompt }] });
-  }
-
-  // Inject system persona parameters inline to guide speech output constraints
-  const systemInstruction = {
-    parts: [{ text: "You are a helpful voice assistant. Keep answers concise, clear, and highly conversational. Do not use markdown syntax, bullet points, asterisks, or bold formatting since your answers are being read out loud." }]
-  };
-
-  const body = JSON.stringify({
-    contents: contentsPayload,
-    systemInstruction: systemInstruction,
-    generationConfig: {
-      maxOutputTokens: 350,
-      temperature: 0.7
-    }
-  });
-
-  try {
-    const response = await fetch(`${BASE_URL}?key=${groqApiKey}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body
-    });
-
-    if (!response.ok) {
-      const errData = await response.json().catch(() => ({}));
-      const msg = errData.error?.message || `HTTP error ${response.status}`;
-      throw new Error(msg);
-    }
-
-    const data = await response.json();
-    const txt = data.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
-    if (!txt) throw new Error('Could not parse text value from response payload.');
-
-    if (!isTest) {
-      messageHistory.push({ role: 'user', content: prompt });
-      messageHistory.push({ role: 'assistant', content: txt });
-      if (messageHistory.length > 20) messageHistory = messageHistory.slice(-20);
-    }
-    return txt;
-  } catch (error) {
-    throw error;
-  }
 }
 
 async function askGemini(prompt) {
