@@ -263,7 +263,7 @@ async function callGeminiAPI(prompt, isTest = false) {
     contents: contentsPayload,
     systemInstruction: { parts: [{ text: "You are a helpful voice assistant. Keep answers concise and conversational. No markdown." }] },
     generationConfig: { 
-      maxOutputTokens: 150, // OPTIMIZATION: Reduced from 350 to 150 to save massive token overhead
+      maxOutputTokens: 400,
       temperature: 0.7 
     }
   });
