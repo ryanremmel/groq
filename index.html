@@ -201,7 +201,8 @@ let isMuted = false;
 
 const PAUSE_DELAY = 1800;
 const ENDPOINTS = [
-  'https://api.groq.com/openai/v1/chat/completions'
+  'https://corsproxy.io/?' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions'),
+  'https://api.allorigins.win/raw?url=' + encodeURIComponent('https://api.groq.com/openai/v1/chat/completions')
 ];
 
 window.addEventListener('DOMContentLoaded', () => {
