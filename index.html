@@ -517,7 +517,7 @@ function removeThinking() { document.getElementById('thinking')?.remove(); }
 function saveKey() {
   const val = document.getElementById('apiKey').value.trim();
   if (!val) { showError('Please enter your Gemini API key'); return; }
-  if (!val.startsWith('AIzaSy')) { showError('Key must be a valid Google AI Studio Key starting with AIzaSy'); return; }
+  if (!val.startsWith('AIzaSy') && !val.startsWith('AQ.')) { showError('Invalid Key Format'); return; }
   groqApiKey = val;
   localStorage.setItem('gemini_api_key', val);
   setStatus(true, 'Key saved ✓');
