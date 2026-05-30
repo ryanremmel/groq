@@ -199,6 +199,7 @@ let handsFreeModeOn = false;
 let pauseTimer = null;
 let isBusy = false;
 let isMuted = false;
+let isAISpeaking = false;
 
 const PAUSE_DELAY = 2000; 
 const BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent';
@@ -350,8 +351,19 @@ function speak(text) {
     if (handsFreeModeOn) { setHint('Listening... tap to stop'); setTimeout(() => startListening(), 200); }
   };
   
+  // 1. Tell the app the AI is starting to talk
+  utter.onstart = () => { 
+    isAISpeaking = true; 
+  };
+  
+  // 2. Tell the app the AI has finished talking
+  utter.onend = () => { 
+    isAISpeaking = false; 
+  };
+  
+  // 3. Keep your original line right here to play the audio
   window.speechSynthesis.speak(utter);
-}
+  }
 
 function stopSpeaking() {
   window.speechSynthesis.cancel();
@@ -442,9 +454,8 @@ function initSpeechRecognition() {
   if (!SR) { showError('Speech recognition not supported. Use Chrome.'); return; }
   recognition = new SR();
   
-  // Continuous listening lets it process background text while AI speaks
   recognition.continuous = true;
-  recognition.interimResults = true;
+  recognition.interimResults = true; // Essential for real-time tracking
   recognition.lang = 'en-US';
 
   recognition.onstart = () => {
@@ -457,30 +468,52 @@ function initSpeechRecognition() {
     hideError();
   };
 
+  // --- START OF SURGICAL REPLACEMENT ---
   recognition.onresult = (e) => {
     clearTimeout(pauseTimer);
+    let interimTranscript = '';
     let currentSpeech = '';
+    
+    // Track both finalized sentences and real-time syllables
     for (let i = e.resultIndex; i < e.results.length; i++) { 
-      currentSpeech += e.results[i][0].transcript; 
+      const text = e.results[i][0].transcript.toLowerCase().trim();
+      if (e.results[i].isFinal) {
+        currentSpeech += text + ' ';
+      } else {
+        interimTranscript += text + ' ';
+      }
     }
     currentSpeech = currentSpeech.trim();
+    interimTranscript = interimTranscript.trim();
     
-    if (currentSpeech.length > 0) {
-      finalTranscript = currentSpeech;
-      document.getElementById('interimText').textContent = finalTranscript;
-      
-      // CRITICAL: If you speak a command while the AI is talking, execute it immediately!
-      if (window.speechSynthesis.speaking && checkVoiceCommand(finalTranscript)) {
+    // 1. REAL-TIME INTERRUPTION: Catch "stop" instantly mid-sentence
+    if (interimTranscript.includes('stop') || currentSpeech.includes('stop')) {
+      if (isAISpeaking || window.speechSynthesis.speaking) {
+        console.log("Interruption keyword 'stop' detected!");
+        window.speechSynthesis.cancel(); // Silence the speech immediately
+        isAISpeaking = false;
         document.getElementById('interimText').textContent = '';
         finalTranscript = '';
+        return; // Halt execution so it doesn't pass 'stop' to Gemini
+      }
+    }
+
+    // 2. FEEDBACK FILTER: Update UI and queue transmission ONLY if the AI isn't speaking its own text
+    if (currentSpeech.length > 0) {
+      if (isAISpeaking || window.speechSynthesis.speaking) {
+        // AI is reading something out loud right now; ignore its echoed audio footprint
         return; 
       }
       
+      finalTranscript = currentSpeech;
+      document.getElementById('interimText').textContent = finalTranscript;
+      
+      // Send the sentence to Gemini after you stop talking for a brief moment
       pauseTimer = setTimeout(() => { sendTranscript(); }, PAUSE_DELAY);
     }
   };
+  // --- END OF SURGICAL REPLACEMENT ---
 
-  // Prevent the mic from shutting down permanently when AI takes turns
   recognition.onend = () => { 
     isRecording = false; 
     document.getElementById('micBtn').classList.remove('recording'); 
