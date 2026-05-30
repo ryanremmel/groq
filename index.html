@@ -219,9 +219,13 @@ function initSpeechRecognition() {
   recognition.interimResults = true;
   recognition.lang = 'en-US';
 
+  // Track the last time text actually changed to prevent duplicate rapid fires
+  let lastTextLength = 0;
+
   recognition.onstart = () => {
     isRecording = true;
     finalTranscript = '';
+    lastTextLength = 0;
     document.getElementById('micBtn').classList.add('recording');
     document.getElementById('interimText').textContent = '';
     setHint('Listening... tap to stop');
@@ -230,32 +234,26 @@ function initSpeechRecognition() {
 
   recognition.onresult = (e) => {
     clearTimeout(pauseTimer);
-    let interim = '';
-    let currentFinal = '';
-    let hasNewFinal = false;
     
-    for (let i = 0; i < e.results.length; i++) {
-      if (e.results[i].isFinal) {
-        currentFinal += e.results[i][0].transcript + ' ';
-        // Track if a new definitive segment was locked in
-        if (i >= e.resultIndex) {
-          hasNewFinal = true;
-        }
-      } else {
-        interim += e.results[i][0].transcript;
-      }
+    let currentSpeech = '';
+    
+    // Grab whatever the microphone hears right now, ignoring the glitchy isFinal flag
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      currentSpeech += e.results[i][0].transcript;
     }
     
-    finalTranscript = currentFinal;
-    const fullText = (finalTranscript + interim).trim();
-    document.getElementById('interimText').textContent = fullText;
+    // Clean up the text stream
+    currentSpeech = currentSpeech.trim();
     
-    // Only prepare to send if we have meaningful text, 
-    // and wait until the speaker stops changing the interim text.
-    if (fullText.length > 0) {
-      // If the browser hasn't finalized it yet, let the user finish speaking naturally
-      const dynamicDelay = hasNewFinal ? 1500 : 2200; 
-      pauseTimer = setTimeout(() => sendTranscript(), dynamicDelay);
+    if (currentSpeech.length > 0) {
+      // Direct assignment breaks the multiplication loop completely
+      finalTranscript = currentSpeech;
+      document.getElementById('interimText').textContent = finalTranscript;
+      
+      // If the user stopped talking and the text length stabilized, prepare to send
+      pauseTimer = setTimeout(() => {
+        sendTranscript();
+      }, 2000); // 2 seconds of absolute silence sends the message
     }
   };
 
